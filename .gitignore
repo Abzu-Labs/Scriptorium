@@ -1,160 +1,72 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# Scriptorium
 
-# C extensions
-*.so
+![Cover Image](Assets/Icons/icon_512x512@2x.png)
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+Scriptorium is an automated audiobook creator for independent authors and publishers.
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+![Logo](Assets/Wordmark/wordmark_1 small.png)
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+## Overview
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
+Key features:
 
-# Translations
-*.mo
-*.pot
+- Text-to-speech synthesis to generate audiobook audio from text
+- Custom voice cloning using author's own voice
+- Intuitive drag and drop editor to reorder chapters
+- Pre-made voices and avatars to choose from
+- Downloadable audiobooks in cross-platform M4B format
 
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
+Built using:
 
-# Flask stuff:
-instance/
-.webassets-cache
+- React frontend with Next.js
+- FastAPI backend on AWS Lambda
+- AWS S3 for storage
+- AWS Cognito for authentication
+- ElevenLabs API for voice cloning and speech synthesis
 
-# Scrapy stuff:
-.scrapy
+## Getting Started
 
-# Sphinx documentation
-docs/_build/
+### Prerequisites
 
-# PyBuilder
-.pybuilder/
-target/
+- Node.js 16+
+- Python 3.8+
+- AWS CLI configured locally
 
-# Jupyter Notebook
-.ipynb_checkpoints
+### Installation
 
-# IPython
-profile_default/
-ipython_config.py
+1. Clone the repository
 
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
+2. Install Python dependencies
 
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
+3. Install JavaScript dependencies
 
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
+4. Configure environment variables
 
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
-#   https://pdm.fming.dev/#use-with-ide
-.pdm.toml
+5. Deploy backend to AWS Lambda
 
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
+6. Run Next.js dev server
 
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
+## Usage
 
-# SageMath parsed files
-*.sage.py
+**Key user flows:**
 
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+- Sign up for a user account
+- Upload text documents
+- Synthesize audiobook using preferred voice
+- Customize and reorder chapters
+- Download audiobook in M4B format
 
-# Spyder project settings
-.spyderproject
-.spyproject
+**Admin functionality:**
 
-# Rope project settings
-.ropeproject
+- Manage user accounts
+- Add/remove synthesis voices
+- Monitor synthesis usage metrics
 
-# mkdocs documentation
-/site
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+## Contributing
 
-# Pyre type checker
-.pyre/
+Contributions are welcome! Please open an issue first to discuss any major changes.
 
-# pytype static type analyzer
-.pytype/
+## License
 
-# Cython debug symbols
-cython_debug/
-
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
+This project is licensed under the MIT license. See [LICENSE](LICENSE) for more details.
