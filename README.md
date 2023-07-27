@@ -19,7 +19,7 @@ Built using:
 - React frontend with Next.js
 - FastAPI backend on AWS Lambda
 - AWS S3 for storage
-- AWS Cognito for authentication
+- AWS supabase for authentication
 - ElevenLabs API for voice cloning and speech synthesis
 
 ## Getting Started 
