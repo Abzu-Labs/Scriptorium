@@ -1,6 +1,6 @@
 \
 ![Cover Image](frontend/public/assets/img/ios-marketing.png)
-![Logo](assets/img/wordmark_2_large.png)
+![Logo](frontend/public/assets/img/wordmark_2_large.png)
 
 Scriptorium is an automated audiobook creator for independent authors and publishers.
 
