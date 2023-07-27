@@ -5,4 +5,5 @@ from app.routes import router as api_router
 
 app = FastAPI()
 
+app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(api_router, prefix="/api")
