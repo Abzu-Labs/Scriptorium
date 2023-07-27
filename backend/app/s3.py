@@ -2,11 +2,12 @@
 
 import boto3
 from botocore.exceptions import BotoCoreError, NoCredentialsError
-from app.config import S3_KEY, S3_SECRET
+from app.config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 from fastapi import HTTPException
 
-s3 = boto3.client('s3', aws_access_key_id=S3_KEY, 
-                  aws_secret_access_key=S3_SECRET)
+s3 = boto3.client('s3',
+                  aws_access_key_id=AWS_ACCESS_KEY_ID,
+                  aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
 
 def upload_file(file, bucket, key):
     try:
@@ -19,5 +20,4 @@ def download_file(bucket, key):
         s3.download_file(bucket, key, key)
     except (BotoCoreError, NoCredentialsError) as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-# other helpers
+    
