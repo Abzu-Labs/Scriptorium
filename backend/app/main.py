@@ -1,8 +1,7 @@
 # main.py
 
 from fastapi import FastAPI
-from app.routes import router
-from app.config import SUPABASE_URL, SUPABASE_KEY 
+from app.routes import router as api_router
 
 app = FastAPI()
 
