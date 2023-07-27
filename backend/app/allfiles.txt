@@ -6,7 +6,6 @@ from app.models import Project, ProjectCreate, File as FileModel, FileOrder
 from app.db import supabase
 from .auth import get_current_user
 from elevenlabs.base import API
-from .utils import extract_text
 
 API.api_key = os.getenv("ELEVEN_API_KEY")
 
@@ -43,7 +42,7 @@ def upload_file(file: UploadFile = File(...), project_id: int, user: dict = Depe
             raise HTTPException(status_code=400, detail="File size exceeds limit")
 
         # Check file type
-        if file.content_type not in ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "image/jpeg", "image/png"]:
+        if file.content_type not in ["application/pdf", "image/jpeg", "image/png"]:
             raise HTTPException(status_code=400, detail="File type not supported")
 
         # Reset file to start
@@ -52,13 +51,7 @@ def upload_file(file: UploadFile = File(...), project_id: int, user: dict = Depe
         filename = file.filename
         s3_path = upload_to_s3(file, project_id)
 
-        # Extract text if it's a PDF or DOCX file
-        if file.content_type in ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
-            text_content = extract_text(file)
-        else:
-            text_content = None
-
-        new_file = FileModel(name=filename, project_id=project_id, text_content=text_content)
+        new_file = FileModel(name=filename, project_id=project_id)
         file_response = supabase.table('files').insert(new_file.dict()).execute()
 
         if not file_response:
@@ -69,7 +62,7 @@ def upload_file(file: UploadFile = File(...), project_id: int, user: dict = Depe
             "path": s3_path
         }
     except Exception as e:
-      raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/files") 
 def get_files(project_id: int, user: dict = Depends(get_current_user)):
@@ -157,9 +150,8 @@ def create_voice_clone(voice_clone: VoiceClone, user: dict = Depends(get_current
   try:
     # Create a voice from the voice clone
     voice = Voice.from_clone(voice_clone)
-
     # Add the new voice ID to the voices table in Supabase
-    supabase.table('user_voices').insert({'voice_id': voice.voice_id, 'user_id': user['id']}).execute()
+    supabase.table('voices').insert({'voice_id': voice.voice_id, 'user_id': user['id']}).execute()
     return {"voice_id": voice.voice_id}
   except UnauthorizedVoiceCloningError:
     raise HTTPException(status_code=403, detail="Unauthorized voice cloning")
@@ -170,13 +162,97 @@ def create_voice_clone(voice_clone: VoiceClone, user: dict = Depends(get_current
 @router.get("/voices")
 def get_voices(user: dict = Depends(get_current_user)):
   try:
-    # Query the user_voices table for all voices of the current user
-    user_voices = supabase.table('user_voices').select().match({'user_id': user['id']}).execute()
-
-    # Format the response data to only return the voice IDs
-    voice_ids = [voice['voice_id'] for voice in user_voices['data']]
-
-    return voice_ids
+    # Query the voices table for all voices of the current user
+    user_voices = supabase.table('voices').select().match({'user_id': user['id']}).execute()
+    return user_voices
   except Exception as e:
     raise HTTPException(status_code=400, detail=str(e))
-  
+
+# s3.py
+
+import boto3
+from botocore.exceptions import BotoCoreError, NoCredentialsError
+from app.config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+from fastapi import HTTPException
+
+s3 = boto3.client('s3',
+                  aws_access_key_id=AWS_ACCESS_KEY_ID,
+                  aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
+
+def upload_file(file, bucket, key):
+    try:
+        s3.upload_file(file, bucket, key)
+    except (BotoCoreError, NoCredentialsError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+def download_file(bucket, key):
+    try:
+        s3.download_file(bucket, key, key)
+    except (BotoCoreError, NoCredentialsError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# models.py
+from pydantic import BaseModel
+
+class User(BaseModel):
+    id: str
+    aud: str
+    role: str
+    email: str
+    confirmation_sent_at: str
+    confirmed_at: str
+    last_sign_in_at: str
+    app_metadata: dict
+    user_metadata: dict
+
+class Project(BaseModel):
+    id: int
+    name: str
+    owner_id: str
+
+class ProjectCreate(Project):
+    pass
+
+class File(BaseModel):
+    id: int
+    name: str
+    project_id: int
+
+class FileOrder(BaseModel):
+    files: List[int]
+
+class TTSRequest(BaseModel):
+    text: str
+    voice_id: str
+
+# requirements.txt
+
+fastapi
+uvicorn
+requests
+boto3
+supabase-py
+
+# db.py
+
+from supabase import create_client
+from app.config import SUPABASE_URL, SUPABASE_KEY
+from fastapi import HTTPException
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+async def get_users():
+    try:
+        res = await supabase.table('users').select('*').execute()
+        return res.data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+async def create_user(user):
+    try:
+        res = await supabase.table('users').insert(user).execute()
+        return res.data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# and other db helper functions

@@ -1,5 +1,9 @@
+# requirements.txt
+
 fastapi
 uvicorn
 requests
 boto3
 supabase-py
+python-docx
+PyPDF2

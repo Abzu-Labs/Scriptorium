@@ -24,10 +24,17 @@ class File(BaseModel):
     id: int
     name: str
     project_id: int
+    text_content: Optional[str] = None
+
 
 class FileOrder(BaseModel):
     files: List[int]
 
 class TTSRequest(BaseModel):
     text: str
+    voice_id: str  # The user will select one of the available voice IDs
+    file_id: int
+
+class UserVoice(BaseModel):
+    user_id: str
     voice_id: str
