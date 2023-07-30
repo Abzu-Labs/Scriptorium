@@ -6,9 +6,6 @@ class User(BaseModel):
     aud: str
     role: str
     email: str
-    confirmation_sent_at: str
-    confirmed_at: str
-    last_sign_in_at: str
     app_metadata: dict
     user_metadata: dict
 
@@ -23,14 +20,15 @@ class ProjectCreate(Project):
 class File(BaseModel):
     id: int
     name: str
-    project_id: int
     text_content: Optional[str] = None
 
 
-class FileOrder(BaseModel):
+class ProjectSequence(BaseModel):
+    project_id: int
     files: List[int]
 
 class TTSRequest(BaseModel):
+    source_file_id: Optional[int] = None
     text: str
     voice_id: str  # The user will select one of the available voice IDs
     file_id: int
@@ -38,3 +36,9 @@ class TTSRequest(BaseModel):
 class UserVoice(BaseModel):
     user_id: str
     voice_id: str
+    date_created: datetime
+
+
+class SampleFile(File):
+
+
