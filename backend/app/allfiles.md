@@ -4,21 +4,26 @@ I am of rewriting, the backend of a Supabase application made with fast API I've
 
 the directory structure is shown below:
 
-**Scriptorium/backend**
+Scriptorium/backend
+
 ````
-├── app
-│   ├── allfiles.txt
-│   ├── config.py
-│   ├── db.py
-│   ├── deps.py
-│   ├── main.py
-│   ├── models.py
-│   ├── routes.py
-│   ├── s3.py
-│   └── utils.py
-├── dockerfile
-└── tests
-    └── test_main.py  
+
+Scriptorium/
+└──backend
+│   ├── app
+│   │   ├── config.py
+│   │   ├── db.py
+│   │   ├── deps.py
+│   │   ├── main.py
+│   │   ├── models.py
+│   │   ├── routes.py
+│   │   ├── s3.py
+│   │   └── utils.py
+│   ├── dockerfile
+│   └── tests
+│      └── test_main.py  
+├── requirements.txt
+└── .env
  ````
 
 Where the /Scriptorium directory will contain both the front and backend modules but at the moment the fastapi system is entirely located in /Scriptorium/backend and relies on only the requirements.txt and .env files within the application root directory
