@@ -1,25 +1,25 @@
-# routes.py
 import os
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from typing import List
-from app.models import Project, ProjectCreate, File as FileModel, FileCreate
+from app.models import Project, ProjectCreate, File as FileModel, FileOrder
 from app.db import supabase
 from .auth import get_current_user
-from elevenlabs.base import API
 from .utils import extract_text
+import requests
+import boto3
+from datetime import datetime
+from requests_toolbelt.multipart import encoder
+
+s3 = boto3.client('s3', region_name='us-east-1')
 
 API.api_key = os.getenv("ELEVEN_API_KEY")
-
-from elevenlabs import VoiceDesign, VoiceClone, Gender, Age, Accent
 
 router = APIRouter()
 
 @router.post("/projects", response_model=Project)
 def create_project(project: ProjectCreate, user: dict = Depends(get_current_user)):
     try:
-        project_dict = project.dict()
-        project_dict.update({"user_id": user['id']})
-        new_project = supabase.table('project').insert(project_dict).execute()
+        new_project = supabase.table('projects').insert(project.dict()).execute()
         return new_project
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -27,7 +27,7 @@ def create_project(project: ProjectCreate, user: dict = Depends(get_current_user
 @router.get("/projects", response_model=List[Project])
 def get_projects(user: dict = Depends(get_current_user)):
     try:
-        user_projects = supabase.table('project') \
+        user_projects = supabase.table('projects') \
                             .select() \
                             .match({'user_id': user['id']}) \
                             .execute()
@@ -35,7 +35,7 @@ def get_projects(user: dict = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.post("/files", response_model=FileModel)
+@router.post("/files")
 def upload_file(file: UploadFile = File(...), project_id: int, user: dict = Depends(get_current_user)):
     try:
         # Check file size
@@ -49,26 +49,32 @@ def upload_file(file: UploadFile = File(...), project_id: int, user: dict = Depe
         # Reset file to start
         file.file.seek(0)
 
+        filename = file.filename
+        s3_path = upload_to_s3(file, project_id)
+
         # Extract text if it's a PDF or DOCX file
         if file.content_type in ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
             text_content = extract_text(file)
         else:
             text_content = None
 
-        new_file = FileCreate(name=file.filename, type=file.content_type, size=len(file.file.read()), user_id=user['id'], text_content=text_content)
-        file_response = supabase.table('file').insert(new_file.dict()).execute()
+        new_file = FileModel(name=filename, project_id=project_id, text_content=text_content)
+        file_response = supabase.table('files').insert(new_file.dict()).execute()
 
         if not file_response:
             raise HTTPException(status_code=400, detail="Failed to insert file.")
 
-        return file_response
+        return {
+            "id": new_file.id,
+            "path": s3_path
+        }
     except Exception as e:
-      raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("/files", response_model=List[FileModel]) 
+@router.get("/files")
 def get_files(project_id: int, user: dict = Depends(get_current_user)):
     try:
-        files = supabase.table('file') \
+        files = supabase.table('files') \
                     .select() \
                     .match({'project_id': project_id, 'user_id': user['id']}) \
                     .execute()
@@ -79,6 +85,8 @@ def get_files(project_id: int, user: dict = Depends(get_current_user)):
         return files
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# Voice samples endpoints
 
 @router.post("/voice-samples")
 def upload_voice_sample(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
@@ -140,7 +148,7 @@ async def create_voice_clone(voice_name: str, user: dict = Depends(get_current_u
         # For each file, download it from S3 and add it to the files list
         for file in files_response['data']:
             file_path = file['name']  # Replace 'name' with the actual column name for the file path in S3
-            s3_file = s3.download_file('Your S3 Bucket Name', file_path)
+            s3_file = s3.download_file('scriptorium-app', file_path)
             files.append(('file', (file_path, open(s3_file, 'rb'), 'audio/mpeg')))
 
         # Set the URL for the API endpoint
@@ -169,8 +177,6 @@ async def create_voice_clone(voice_name: str, user: dict = Depends(get_current_u
         # Check if the request was successful
         if response.status_code != 200:
             raise HTTPException(status_code=400, detail="Failed to clone voice.")
-
-        # Get the voice_id from the response
         voice_id = response.json().get("voice_id")
 
         if not voice_id:
@@ -190,68 +196,18 @@ async def create_voice_clone(voice_name: str, user: dict = Depends(get_current_u
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @router.get("/voices")
 def get_voices(user: dict = Depends(get_current_user)):
-  try:
-    # Query the user_voices table for all voices of the current user
-    user_voices = supabase.table('user_voices').select().match({'user_id': user['id']}).execute()
-
-    # Format the response data to only return the voice IDs
-    voice_ids = [voice['voice_id'] for voice in user_voices['data']]
-
-    return voice_ids
-  except Exception as e:
-    raise HTTPException(status_code=400, detail=str(e))
-
-@router.post("/tts")
-async def generate_tts(text: str, voice_id: str, user: dict = Depends(get_current_user)):
     try:
-        # Set the URL for the API endpoint
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?optimize_streaming_latency=0"
+        # Query the user_voices table for all voices of the current user
+        user_voices = supabase.table('custom_voice') \
+                    .select() \
+                    .match({'user_id': user['user_id']}) \
+                    .execute()
 
-        # Set the headers for the request
-        headers = {
-            "accept": "audio/mpeg",
-            "xi-api-key": os.getenv("ELEVEN_API_KEY"),
-            "Content-Type": "application/json",
-        }
+        # Format the response data to only return the voice IDs
+        voice_ids = [voice['voice_id'] for voice in user_voices['data']]
 
-        # Set the body of the request
-        data = {
-            "text": text,
-            "model_id": "eleven_monolingual_v1",
-            "voice_settings": {
-                "stability": 0,
-                "similarity_boost": 0,
-                "style": 0.5,
-                "use_speaker_boost": True,
-            },
-        }
-
-        # Send the request to the API
-        response = requests.post(url, headers=headers, data=json.dumps(data))
-
-        # Check if the request was successful
-        if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to generate TTS.")
-
-        # Get the audio from the response
-        audio = response.content
-
-        # Upload the audio to S3
-        s3_path = upload_to_s3(audio, "tts-output/")
-        new_audio = {
-            "initiated_at": datetime.now(),
-            "successful": True,
-            "source_file": None,
-            "synthesized_audio": s3_path,
-            "voice_used": voice_id,
-            "audio_length": len(audio),
-        }
-        synthesized_audio_response = supabase.table('synthesized_audio').insert(new_audio).execute()
-        if not synthesized_audio_response:
-            raise HTTPException(status_code=400, detail="Failed to insert synthesized audio.")
-        return {"audio_path": s3_path}
+        return voice_ids
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
