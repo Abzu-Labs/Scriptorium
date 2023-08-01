@@ -1,8 +1,11 @@
+## Backend Directory & FastAPI Components
+
 I am of rewriting, the backend of a Supabase application made with fast API I've that my attempts to create a user system were flawed in the sense that they generated a user ID as an INT eight value, which did not reference your authorization UID created by the super base library, which was I use the platform in the first place, and all subsequent data models relied on that faulty user construction so now I have the best of my abilities on my own Ed data model, but want to check through the assumptions as were through the ramifications which these changes to my models.py well necessitate on the rest of my backend
 
-the directory structure is at present:
+the directory structure is shown below:
 
-/Users/jake/dev/scriptorium/backend
+**Scriptorium/backend**
+````
 ├── app
 │   ├── allfiles.txt
 │   ├── config.py
@@ -15,10 +18,13 @@ the directory structure is at present:
 │   └── utils.py
 ├── dockerfile
 └── tests
-    └── test_main.py
+    └── test_main.py  
+ ````
 
 Where the /Scriptorium directory will contain both the front and backend modules but at the moment the fastapi system is entirely located in /Scriptorium/backend and relies on only the requirements.txt and .env files within the application root directory
 
+### FastAPI Backend Files
+````
 # config.py
 
 from dotenv import load_dotenv
@@ -33,7 +39,8 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SECRET_KEY = os.getenv("SECRET_KEY")
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
-
+````
+````
 # models.py
 from pydantic import BaseModel
 
@@ -76,8 +83,8 @@ class UserVoice(BaseModel):
 
 
 class SampleFile(File):
-
-
+````
+````
 # s3.py
 
 import boto3
@@ -100,7 +107,8 @@ def download_file(bucket, key):
         s3.download_file(bucket, key, key)
     except (BotoCoreError, NoCredentialsError) as e:
         raise HTTPException(status_code=400, detail=str(e))
-
+````
+````
  # utils.py
 
 from docx import Document
@@ -116,6 +124,8 @@ def extract_text(file):
     else:
         raise ValueError(f"Unsupported file type: {file.content_type}")
     return text
+````
+````
 # db.py
 
 from supabase import create_client
@@ -139,6 +149,9 @@ async def create_user(user):
         raise HTTPException(status_code=400, detail=str(e))
 
 # and other db helper functions
+````
+````
+# deps.py
 from supabase_py import create_client, session
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -147,8 +160,9 @@ async def get_current_user(token: str = Depends(session)):
     # Validate JWT token with Supabase
     payload = supabase.auth.get_user(token)
     return payload.get('user')
-
-    # main.py
+````
+````
+# main.py
 
 from fastapi import FastAPI
 from app.routes import router as api_router
@@ -157,7 +171,8 @@ app = FastAPI()
 
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(api_router, prefix="/api")
-
+````
+````
 # routes.py
 import os
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -339,3 +354,4 @@ def get_voices(user: dict = Depends(get_current_user)):
     return voice_ids
   except Exception as e:
     raise HTTPException(status_code=400, detail=str(e))
+````

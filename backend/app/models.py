@@ -1,44 +1,69 @@
-# models.py
 from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+from uuid import UUID
 
-class User(BaseModel):
-    id: str
-    aud: str
-    role: str
-    email: str
-    app_metadata: dict
-    user_metadata: dict
-
-class Project(BaseModel):
-    id: int
-    name: str
-    owner_id: str
-
-class ProjectCreate(Project):
-    pass
 
 class File(BaseModel):
     id: int
-    name: str
-    text_content: Optional[str] = None
+    name: Optional[str] = None
+    type: Optional[str] = None
+    size: Optional[int] = None
+    created_at: Optional[datetime] = None
+    user_id: Optional[UUID] = None
+    speech_sample: Optional[bool] = None
 
 
-class ProjectSequence(BaseModel):
-    project_id: int
-    files: List[int]
+class Project(BaseModel):
+    id: int
+    user_id: Optional[UUID] = None
+    title: Optional[str] = None
+    author: Optional[str] = None
+    description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    cover_image: Optional[int] = None
 
-class TTSRequest(BaseModel):
-    source_file_id: Optional[int] = None
-    text: str
-    voice_id: str  # The user will select one of the available voice IDs
+
+class User(BaseModel):
+    user_id: UUID
+    email: Optional[str] = None
+
+
+class Voice(BaseModel):
+    id: str
+    name: Optional[str] = None
+    age: Optional[str] = None
+    gender: Optional[str] = None
+    accent: Optional[str] = None
+    icon: Optional[str] = None
+
+
+class ProjectFile(BaseModel):
     file_id: int
+    project_id: int
+    sequencing: Optional[int] = None
+    modified_at: Optional[datetime] = None
+    num_characters: Optional[int] = None
 
-class UserVoice(BaseModel):
-    user_id: str
+
+class SynthesizedAudio(BaseModel):
+    id: int
+    initiated_at: Optional[datetime] = None
+    successful: Optional[bool] = None
+    source_file: Optional[int] = None
+    synthesized_audio: Optional[int] = None
+    voice_used: Optional[str] = None
+    audio_length: Optional[int] = None
+
+
+class CustomVoice(BaseModel):
     voice_id: str
-    date_created: datetime
+    created_at: Optional[datetime] = None
+    user_id: Optional[UUID] = None
 
 
-class SampleFile(File):
-
-
+class Export(BaseModel):
+    id: int
+    created_at: Optional[datetime] = None
+    project_id: Optional[int] = None
+    audio_length: Optional[int] = None
