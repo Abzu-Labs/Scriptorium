@@ -4,6 +4,9 @@ fastapi
 uvicorn
 requests
 boto3
-supabase-py
+supabase
+python-dotenv
 python-docx
 PyPDF2
+supabase
+

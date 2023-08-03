@@ -1,5 +1,5 @@
 from fastapi import Depends
-from supabase_py import create_client, Client
+from supabase import create_client, Client
 from app.config import SUPABASE_URL, SUPABASE_KEY
 from fastapi.security import OAuth2PasswordBearer
 

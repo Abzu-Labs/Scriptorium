@@ -1,0 +1,1055 @@
+
+# Filename: ./app/__init__.py
+
+
+# Filename: ./app/config.py
+
+# config.py
+
+from dotenv import load_dotenv
+import os
+
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SECRET_KEY = os.getenv("SECRET_KEY")
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
+ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
+
+# Filename: ./app/db.py
+
+# db.py
+
+from supabase import create_client
+from app.config import SUPABASE_URL, SUPABASE_KEY
+from fastapi import HTTPException
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+async def get_users():
+    try:
+        res = await supabase.table('users').select('*').execute()
+        return res.data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+async def create_user(user):
+    try:
+        res = await supabase.table('users').insert(user).execute()
+        return res.data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# and other db helper functions
+
+# Filename: ./app/deps.py
+
+from fastapi import Depends
+from supabase_py import create_client, Client
+from app.config import SUPABASE_URL, SUPABASE_KEY
+from fastapi.security import OAuth2PasswordBearer
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    # Validate JWT token with Supabase
+    payload = supabase.auth.get_user(token)
+    return payload.get('user')
+
+# Filename: ./app/main.py
+
+# main.py
+
+from fastapi import FastAPI
+from app.routes import router as api_router
+
+app = FastAPI()
+
+app.include_router(auth_router, prefix="/auth", tags=["auth"])
+app.include_router(api_router, prefix="/api")
+
+# Filename: ./app/models.py
+
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+from uuid import UUID
+
+
+class File(BaseModel):
+    id: int
+    name: Optional[str] = None
+    type: Optional[str] = None
+    size: Optional[int] = None
+    created_at: Optional[datetime] = None
+    user_id: Optional[UUID] = None
+    speech_sample: Optional[bool] = None
+
+
+class Project(BaseModel):
+    id: int
+    user_id: Optional[UUID] = None
+    title: Optional[str] = None
+    author: Optional[str] = None
+    description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    cover_image: Optional[int] = None
+
+
+class User(BaseModel):
+    user_id: UUID
+    email: Optional[str] = None
+
+
+class Voice(BaseModel):
+    id: str
+    name: Optional[str] = None
+    age: Optional[str] = None
+    gender: Optional[str] = None
+    accent: Optional[str] = None
+    icon: Optional[str] = None
+
+
+class ProjectFile(BaseModel):
+    file_id: int
+    project_id: int
+    sequencing: Optional[int] = None
+    modified_at: Optional[datetime] = None
+    num_characters: Optional[int] = None
+
+
+class SynthesizedAudio(BaseModel):
+    id: int
+    initiated_at: Optional[datetime] = None
+    successful: Optional[bool] = None
+    source_file: Optional[int] = None
+    synthesized_audio: Optional[int] = None
+    voice_used: Optional[str] = None
+    audio_length: Optional[int] = None
+
+
+class CustomVoice(BaseModel):
+    voice_id: str
+    created_at: Optional[datetime] = None
+    user_id: Optional[UUID] = None
+
+
+class Export(BaseModel):
+    id: int
+    created_at: Optional[datetime] = None
+    project_id: Optional[int] = None
+    audio_length: Optional[int] = None
+
+# Filename: ./app/routes.py
+
+import os
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from typing import List
+from app.models import Project, ProjectCreate, File as FileModel, FileOrder
+from app.db import supabase
+from .auth import get_current_user
+from .utils import extract_text
+import requests
+import boto3
+from datetime import datetime
+from requests_toolbelt.multipart import encoder
+
+s3 = boto3.client('s3', region_name='us-east-1')
+
+API.api_key = os.getenv("ELEVEN_API_KEY")
+
+router = APIRouter()
+
+@router.post("/projects", response_model=Project)
+def create_project(project: ProjectCreate, user: dict = Depends(get_current_user)):
+    try:
+        new_project = supabase.table('projects').insert(project.dict()).execute()
+        return new_project
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/projects", response_model=List[Project])
+def get_projects(user: dict = Depends(get_current_user)):
+    try:
+        user_projects = supabase.table('projects') \
+                            .select() \
+                            .match({'user_id': user['id']}) \
+                            .execute()
+        return user_projects
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/files")
+def upload_file(file: UploadFile = File(...), project_id: int, user: dict = Depends(get_current_user)):
+    try:
+        # Check file size
+        if len(file.file.read()) > 10 * 1024 * 1024:  # 10MB limit
+            raise HTTPException(status_code=400, detail="File size exceeds limit")
+
+        # Check file type
+        if file.content_type not in ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "image/jpeg", "image/png"]:
+            raise HTTPException(status_code=400, detail="File type not supported")
+
+        # Reset file to start
+        file.file.seek(0)
+
+        filename = file.filename
+        s3_path = upload_to_s3(file, project_id)
+
+        # Extract text if it's a PDF or DOCX file
+        if file.content_type in ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
+            text_content = extract_text(file)
+        else:
+            text_content = None
+
+        new_file = FileModel(name=filename, project_id=project_id, text_content=text_content)
+        file_response = supabase.table('files').insert(new_file.dict()).execute()
+
+        if not file_response:
+            raise HTTPException(status_code=400, detail="Failed to insert file.")
+
+        return {
+            "id": new_file.id,
+            "path": s3_path
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/files")
+def get_files(project_id: int, user: dict = Depends(get_current_user)):
+    try:
+        files = supabase.table('files') \
+                    .select() \
+                    .match({'project_id': project_id, 'user_id': user['id']}) \
+                    .execute()
+
+        if not files:
+            raise HTTPException(status_code=400, detail="Failed to retrieve files.")
+
+        return files
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# Voice samples endpoints
+
+@router.post("/voice-samples")
+def upload_voice_sample(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    try:
+        # Check file size
+        if len(file.file.read()) > 10 * 1024 * 1024:  # 10MB limit
+            raise HTTPException(status_code=400, detail="File size exceeds limit")
+
+        # Check file type
+        if file.content_type not in ["audio/mpeg", "audio/wav"]:
+            raise HTTPException(status_code=400, detail="File type not supported")
+
+        # Reset file to start
+        file.file.seek(0)
+
+        s3_path = upload_to_s3(file, user['id'])
+
+        record = {'user_id': user['id'], 'file_path': s3_path}
+
+        sample_response = supabase.table('voice_samples').insert(record).execute()
+
+        if not sample_response:
+            raise HTTPException(status_code=400, detail="Failed to insert voice sample.")
+
+        return {
+            "path": s3_path
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/voice-samples")
+def get_voice_samples(user: dict = Depends(get_current_user)):
+    try:
+        samples = supabase.table('voice_samples') \
+                    .select() \
+                    .match({'user_id': user['id']}) \
+                    .execute()
+
+        if not samples:
+            raise HTTPException(status_code=400, detail="Failed to retrieve voice samples.")
+
+        return samples
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/voice-clone")
+async def create_voice_clone(voice_name: str, user: dict = Depends(get_current_user)):
+    try:
+        # Fetch all the files associated with the user and marked as speech_sample=true
+        files_response = supabase.table('file') \
+                            .select('*') \
+                            .match({'user_id': user['user_id'], 'speech_sample': True}) \
+                            .execute()
+
+        if not files_response or 'data' not in files_response:
+            raise HTTPException(status_code=400, detail="Failed to retrieve voice samples.")
+
+        files = []
+        # For each file, download it from S3 and add it to the files list
+        for file in files_response['data']:
+            file_path = file['name']  # Replace 'name' with the actual column name for the file path in S3
+            s3_file = s3.download_file('scriptorium-app', file_path)
+            files.append(('file', (file_path, open(s3_file, 'rb'), 'audio/mpeg')))
+
+        # Set the URL for the API endpoint
+        url = "https://api.elevenlabs.io/v1/voices/add"
+
+        # Set the headers for the request
+        headers = {
+            "accept": "application/json",
+            "xi-api-key": os.getenv("ELEVEN_API_KEY"),
+        }
+
+        # Prepare the data for the request
+        data = {"name": voice_name}
+
+        # Create a multipart encoded form with the files
+        multipart_data = encoder.MultipartEncoder(
+            fields={**data, **{f"file_{i}": (file.filename, file.file, file.content_type) for i, file in enumerate(files)}}
+        )
+
+        # Update headers with the correct content type
+        headers["Content-Type"] = multipart_data.content_type
+
+        # Send the request to the API
+        response = requests.post(url, headers=headers, data=multipart_data)
+
+        # Check if the request was successful
+        if response.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to clone voice.")
+        voice_id = response.json().get("voice_id")
+
+        if not voice_id:
+            raise HTTPException(status_code=400, detail="Failed to get voice_id.")
+
+        # Add the new voice ID to the custom_voice table in Supabase
+        new_voice = {
+            "voice_id": voice_id,
+            "created_at": datetime.now(),
+            "user_id": user['user_id'],
+        }
+        voice_response = supabase.table('custom_voice').insert(new_voice).execute()
+        if not voice_response:
+            raise HTTPException(status_code=400, detail="Failed to insert voice.")
+
+        return {"voice_id": voice_id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/voices")
+def get_voices(user: dict = Depends(get_current_user)):
+    try:
+        # Query the user_voices table for all voices of the current user
+        user_voices = supabase.table('custom_voice') \
+                    .select() \
+                    .match({'user_id': user['user_id']}) \
+                    .execute()
+
+        # Format the response data to only return the voice IDs
+        voice_ids = [voice['voice_id'] for voice in user_voices['data']]
+
+        return voice_ids
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# Filename: ./app/s3.py
+
+# s3.py
+
+import boto3
+from botocore.exceptions import BotoCoreError, NoCredentialsError
+from app.config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+from fastapi import HTTPException
+
+s3 = boto3.client('s3',
+                  aws_access_key_id=AWS_ACCESS_KEY_ID,
+                  aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
+
+def upload_file(file, bucket, key):
+    try:
+        s3.upload_file(file, bucket, key)
+    except (BotoCoreError, NoCredentialsError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+def download_file(bucket, key):
+    try:
+        s3.download_file(bucket, key, key)
+    except (BotoCoreError, NoCredentialsError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+# Filename: ./app/utils.py
+
+# utils.py
+
+from docx import Document
+import PyPDF2
+
+def extract_text(file):
+    if file.content_type == "application/pdf":
+        pdf_reader = PyPDF2.PdfFileReader(file.file)
+        text = " ".join(page.extractText() for page in pdf_reader.pages)
+    elif file.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        doc = Document(file.file)
+        text = " ".join(paragraph.text for paragraph in doc.paragraphs)
+    else:
+        raise ValueError(f"Unsupported file type: {file.content_type}")
+    return text
+
+# Filename: ./backend_combined.txt
+
+# Directory Structure
+
+backend/
+├── app
+│   ├── config.py
+│   ├── db.py
+│   ├── deps.py
+│   ├── main.py
+│   ├── models.py
+│   ├── routes.py
+│   ├── s3.py
+│   └── utils.py
+├── backend_combined.txt
+├── dockerfile
+├── rollup.sh
+└── tests
+    └── test_main.py
+
+
+# Filename: ./app/config.py
+
+# config.py
+
+from dotenv import load_dotenv
+import os
+
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SECRET_KEY = os.getenv("SECRET_KEY")
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
+ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
+
+# Filename: ./app/db.py
+
+# db.py
+
+from supabase import create_client
+from app.config import SUPABASE_URL, SUPABASE_KEY
+from fastapi import HTTPException
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+async def get_users():
+    try:
+        res = await supabase.table('users').select('*').execute()
+        return res.data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+async def create_user(user):
+    try:
+        res = await supabase.table('users').insert(user).execute()
+        return res.data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# and other db helper functions
+
+# Filename: ./app/deps.py
+
+from fastapi import Depends
+from supabase_py import create_client, Client
+from app.config import SUPABASE_URL, SUPABASE_KEY
+from fastapi.security import OAuth2PasswordBearer
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    # Validate JWT token with Supabase
+    payload = supabase.auth.get_user(token)
+    return payload.get('user')
+
+# Filename: ./app/main.py
+
+# main.py
+
+from fastapi import FastAPI
+from app.routes import router as api_router
+
+app = FastAPI()
+
+app.include_router(auth_router, prefix="/auth", tags=["auth"])
+app.include_router(api_router, prefix="/api")
+
+# Filename: ./app/models.py
+
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+from uuid import UUID
+
+
+class File(BaseModel):
+    id: int
+    name: Optional[str] = None
+    type: Optional[str] = None
+    size: Optional[int] = None
+    created_at: Optional[datetime] = None
+    user_id: Optional[UUID] = None
+    speech_sample: Optional[bool] = None
+
+
+class Project(BaseModel):
+    id: int
+    user_id: Optional[UUID] = None
+    title: Optional[str] = None
+    author: Optional[str] = None
+    description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    cover_image: Optional[int] = None
+
+
+class User(BaseModel):
+    user_id: UUID
+    email: Optional[str] = None
+
+
+class Voice(BaseModel):
+    id: str
+    name: Optional[str] = None
+    age: Optional[str] = None
+    gender: Optional[str] = None
+    accent: Optional[str] = None
+    icon: Optional[str] = None
+
+
+class ProjectFile(BaseModel):
+    file_id: int
+    project_id: int
+    sequencing: Optional[int] = None
+    modified_at: Optional[datetime] = None
+    num_characters: Optional[int] = None
+
+
+class SynthesizedAudio(BaseModel):
+    id: int
+    initiated_at: Optional[datetime] = None
+    successful: Optional[bool] = None
+    source_file: Optional[int] = None
+    synthesized_audio: Optional[int] = None
+    voice_used: Optional[str] = None
+    audio_length: Optional[int] = None
+
+
+class CustomVoice(BaseModel):
+    voice_id: str
+    created_at: Optional[datetime] = None
+    user_id: Optional[UUID] = None
+
+
+class Export(BaseModel):
+    id: int
+    created_at: Optional[datetime] = None
+    project_id: Optional[int] = None
+    audio_length: Optional[int] = None
+
+# Filename: ./app/routes.py
+
+import os
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from typing import List
+from app.models import Project, ProjectCreate, File as FileModel, FileOrder
+from app.db import supabase
+from .auth import get_current_user
+from .utils import extract_text
+import requests
+import boto3
+from datetime import datetime
+from requests_toolbelt.multipart import encoder
+
+s3 = boto3.client('s3', region_name='us-east-1')
+
+API.api_key = os.getenv("ELEVEN_API_KEY")
+
+router = APIRouter()
+
+@router.post("/projects", response_model=Project)
+def create_project(project: ProjectCreate, user: dict = Depends(get_current_user)):
+    try:
+        new_project = supabase.table('projects').insert(project.dict()).execute()
+        return new_project
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/projects", response_model=List[Project])
+def get_projects(user: dict = Depends(get_current_user)):
+    try:
+        user_projects = supabase.table('projects') \
+                            .select() \
+                            .match({'user_id': user['id']}) \
+                            .execute()
+        return user_projects
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/files")
+def upload_file(file: UploadFile = File(...), project_id: int, user: dict = Depends(get_current_user)):
+    try:
+        # Check file size
+        if len(file.file.read()) > 10 * 1024 * 1024:  # 10MB limit
+            raise HTTPException(status_code=400, detail="File size exceeds limit")
+
+        # Check file type
+        if file.content_type not in ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "image/jpeg", "image/png"]:
+            raise HTTPException(status_code=400, detail="File type not supported")
+
+        # Reset file to start
+        file.file.seek(0)
+
+        filename = file.filename
+        s3_path = upload_to_s3(file, project_id)
+
+        # Extract text if it's a PDF or DOCX file
+        if file.content_type in ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
+            text_content = extract_text(file)
+        else:
+            text_content = None
+
+        new_file = FileModel(name=filename, project_id=project_id, text_content=text_content)
+        file_response = supabase.table('files').insert(new_file.dict()).execute()
+
+        if not file_response:
+            raise HTTPException(status_code=400, detail="Failed to insert file.")
+
+        return {
+            "id": new_file.id,
+            "path": s3_path
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/files")
+def get_files(project_id: int, user: dict = Depends(get_current_user)):
+    try:
+        files = supabase.table('files') \
+                    .select() \
+                    .match({'project_id': project_id, 'user_id': user['id']}) \
+                    .execute()
+
+        if not files:
+            raise HTTPException(status_code=400, detail="Failed to retrieve files.")
+
+        return files
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# Voice samples endpoints
+
+@router.post("/voice-samples")
+def upload_voice_sample(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    try:
+        # Check file size
+        if len(file.file.read()) > 10 * 1024 * 1024:  # 10MB limit
+            raise HTTPException(status_code=400, detail="File size exceeds limit")
+
+        # Check file type
+        if file.content_type not in ["audio/mpeg", "audio/wav"]:
+            raise HTTPException(status_code=400, detail="File type not supported")
+
+        # Reset file to start
+        file.file.seek(0)
+
+        s3_path = upload_to_s3(file, user['id'])
+
+        record = {'user_id': user['id'], 'file_path': s3_path}
+
+        sample_response = supabase.table('voice_samples').insert(record).execute()
+
+        if not sample_response:
+            raise HTTPException(status_code=400, detail="Failed to insert voice sample.")
+
+        return {
+            "path": s3_path
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/voice-samples")
+def get_voice_samples(user: dict = Depends(get_current_user)):
+    try:
+        samples = supabase.table('voice_samples') \
+                    .select() \
+                    .match({'user_id': user['id']}) \
+                    .execute()
+
+        if not samples:
+            raise HTTPException(status_code=400, detail="Failed to retrieve voice samples.")
+
+        return samples
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/voice-clone")
+async def create_voice_clone(voice_name: str, user: dict = Depends(get_current_user)):
+    try:
+        # Fetch all the files associated with the user and marked as speech_sample=true
+        files_response = supabase.table('file') \
+                            .select('*') \
+                            .match({'user_id': user['user_id'], 'speech_sample': True}) \
+                            .execute()
+
+        if not files_response or 'data' not in files_response:
+            raise HTTPException(status_code=400, detail="Failed to retrieve voice samples.")
+
+        files = []
+        # For each file, download it from S3 and add it to the files list
+        for file in files_response['data']:
+            file_path = file['name']  # Replace 'name' with the actual column name for the file path in S3
+            s3_file = s3.download_file('scriptorium-app', file_path)
+            files.append(('file', (file_path, open(s3_file, 'rb'), 'audio/mpeg')))
+
+        # Set the URL for the API endpoint
+        url = "https://api.elevenlabs.io/v1/voices/add"
+
+        # Set the headers for the request
+        headers = {
+            "accept": "application/json",
+            "xi-api-key": os.getenv("ELEVEN_API_KEY"),
+        }
+
+        # Prepare the data for the request
+        data = {"name": voice_name}
+
+        # Create a multipart encoded form with the files
+        multipart_data = encoder.MultipartEncoder(
+            fields={**data, **{f"file_{i}": (file.filename, file.file, file.content_type) for i, file in enumerate(files)}}
+        )
+
+        # Update headers with the correct content type
+        headers["Content-Type"] = multipart_data.content_type
+
+        # Send the request to the API
+        response = requests.post(url, headers=headers, data=multipart_data)
+
+        # Check if the request was successful
+        if response.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to clone voice.")
+        voice_id = response.json().get("voice_id")
+
+        if not voice_id:
+            raise HTTPException(status_code=400, detail="Failed to get voice_id.")
+
+        # Add the new voice ID to the custom_voice table in Supabase
+        new_voice = {
+            "voice_id": voice_id,
+            "created_at": datetime.now(),
+            "user_id": user['user_id'],
+        }
+        voice_response = supabase.table('custom_voice').insert(new_voice).execute()
+        if not voice_response:
+            raise HTTPException(status_code=400, detail="Failed to insert voice.")
+
+        return {"voice_id": voice_id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/voices")
+def get_voices(user: dict = Depends(get_current_user)):
+    try:
+        # Query the user_voices table for all voices of the current user
+        user_voices = supabase.table('custom_voice') \
+                    .select() \
+                    .match({'user_id': user['user_id']}) \
+                    .execute()
+
+        # Format the response data to only return the voice IDs
+        voice_ids = [voice['voice_id'] for voice in user_voices['data']]
+
+        return voice_ids
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# Filename: ./app/s3.py
+
+# s3.py
+
+import boto3
+from botocore.exceptions import BotoCoreError, NoCredentialsError
+from app.config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+from fastapi import HTTPException
+
+s3 = boto3.client('s3',
+                  aws_access_key_id=AWS_ACCESS_KEY_ID,
+                  aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
+
+def upload_file(file, bucket, key):
+    try:
+        s3.upload_file(file, bucket, key)
+    except (BotoCoreError, NoCredentialsError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+def download_file(bucket, key):
+    try:
+        s3.download_file(bucket, key, key)
+    except (BotoCoreError, NoCredentialsError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+# Filename: ./app/utils.py
+
+# utils.py
+
+from docx import Document
+import PyPDF2
+
+def extract_text(file):
+    if file.content_type == "application/pdf":
+        pdf_reader = PyPDF2.PdfFileReader(file.file)
+        text = " ".join(page.extractText() for page in pdf_reader.pages)
+    elif file.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        doc = Document(file.file)
+        text = " ".join(paragraph.text for paragraph in doc.paragraphs)
+    else:
+        raise ValueError(f"Unsupported file type: {file.content_type}")
+    return text
+
+# Filename: ./dockerfile
+
+FROM python:3.8
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]
+# Filename: ./rollup.sh
+
+#!/bin/bash
+
+# Output file
+output_file="combined.txt"
+
+# Base directory to start from
+base_dir="."
+
+# List of files and directories to ignore
+declare -a ignore_list=("node_modules" "yarn.lock" "package-lock.json" "content-rollups")
+
+# Function that checks if a file or directory should be ignored
+is_ignored() {
+  for i in "${ignore_list[@]}"; do
+    if [[ "$1" == *"$i"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Function that checks if a file has a specific extension
+has_extension() {
+  if [[ "$1" == *"$2"* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# Function that combines files
+combine_files() {
+  for file in "$1"/*; do
+    # If it's a directory, recursively call this function
+    if [ -d "${file}" ]; then
+      # If directory is not a hidden one and not in the ignore list, process it
+      if [[ $(basename "${file}") != .* ]] && ! is_ignored "${file}"; then
+        combine_files "${file}"
+      fi
+    # If it's a file, append the filename as a comment and the file's contents to the output file
+    elif [ -f "${file}" ]; then
+      # If file is not a hidden one, not in the ignore list, and not a .png file, process it
+      if [[ $(basename "${file}") != .* ]] && ! is_ignored "${file}" && ! has_extension "${file}" ".png"; then
+        echo "Processing ${file}"
+        echo -e "\n# Filename: ${file}\n" >> "${output_file}"
+        cat "${file}" >> "${output_file}"
+      fi
+    fi
+  done
+}
+
+# Remove the output file if it already exists
+if [ -f "${output_file}" ]; then
+  rm "${output_file}"
+fi
+
+# Start the file combination
+combine_files "${base_dir}"
+
+# Filename: ./tests/test_main.py
+
+# tests/test_main.py
+
+from fastapi.testclient import TestClient
+from main import app
+from app.models import ProjectCreate
+
+client = TestClient(app)
+
+def test_user_signup():
+    response = client.post(
+        "/api/signup",
+        json={"email": "test@example.com", "password": "password123"}
+    )
+    assert response.status_code == 200
+    assert "id" in response.json()
+
+def test_user_login():
+    response = client.post(
+        "/api/login",
+        data={"username": "test@example.com", "password": "password123"}
+    )
+    assert response.status_code == 200
+    assert "access_token" in response.json()
+
+def test_create_project():
+    response = client.post(
+        "/api/projects",
+        json={"name": "Test Project"},
+        headers={"Authorization": "Bearer <access_token>"}  # replace <access_token> with actual token
+    )
+    assert response.status_code == 200
+    assert "id" in response.json()
+    
+# Filename: ./dockerfile
+
+FROM python:3.8
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]
+# Filename: ./requirements.txt
+
+# requirements.txt
+
+fastapi
+uvicorn
+requests
+boto3
+supabase-py
+python-docx
+PyPDF2
+
+# Filename: ./rollup.sh
+
+#!/bin/bash
+
+# Output file
+output_file="combined.txt"
+
+# Base directory to start from
+base_dir="."
+
+# List of files and directories to ignore
+declare -a ignore_list=("node_modules" "yarn.lock" "package-lock.json" "content-rollups" "/env")
+
+# Function that checks if a file or directory should be ignored
+is_ignored() {
+  for i in "${ignore_list[@]}"; do
+    if [[ "$1" == *"$i"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Function that checks if a file has a specific extension
+has_extension() {
+  if [[ "$1" == *"$2"* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# Function that combines files
+combine_files() {
+  for file in "$1"/*; do
+    # If it's a directory, recursively call this function
+    if [ -d "${file}" ]; then
+      # If directory is not a hidden one and not in the ignore list, process it
+      if [[ $(basename "${file}") != .* ]] && ! is_ignored "${file}"; then
+        combine_files "${file}"
+      fi
+    # If it's a file, append the filename as a comment and the file's contents to the output file
+    elif [ -f "${file}" ]; then
+      # If file is not a hidden one, not in the ignore list, and not a .png file, process it
+      if [[ $(basename "${file}") != .* ]] && ! is_ignored "${file}" && ! has_extension "${file}" ".png"; then
+        echo "Processing ${file}"
+        echo -e "\n# Filename: ${file}\n" >> "${output_file}"
+        cat "${file}" >> "${output_file}"
+      fi
+    fi
+  done
+}
+
+# Remove the output file if it already exists
+if [ -f "${output_file}" ]; then
+  rm "${output_file}"
+fi
+
+# Start the file combination
+combine_files "${base_dir}"
+
+# Filename: ./tests/test_main.py
+
+# tests/test_main.py
+
+from fastapi.testclient import TestClient
+from main import app
+from app.models import ProjectCreate
+
+client = TestClient(app)
+
+def test_user_signup():
+    response = client.post(
+        "/api/signup",
+        json={"email": "test@example.com", "password": "password123"}
+    )
+    assert response.status_code == 200
+    assert "id" in response.json()
+
+def test_user_login():
+    response = client.post(
+        "/api/login",
+        data={"username": "test@example.com", "password": "password123"}
+    )
+    assert response.status_code == 200
+    assert "access_token" in response.json()
+
+def test_create_project():
+    response = client.post(
+        "/api/projects",
+        json={"name": "Test Project"},
+        headers={"Authorization": "Bearer <access_token>"}  # replace <access_token> with actual token
+    )
+    assert response.status_code == 200
+    assert "id" in response.json()
+    

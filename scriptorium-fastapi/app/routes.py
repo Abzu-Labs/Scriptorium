@@ -3,16 +3,17 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from typing import List
 from app.models import Project, ProjectCreate, File as FileModel, FileOrder
 from app.db import supabase
-from .auth import get_current_user
+from supabase import get_current_user
 from .utils import extract_text
 import requests
 import boto3
 from datetime import datetime
 from requests_toolbelt.multipart import encoder
+from s3 import upload_file as upload_to_s3
+from config import ELEVEN_API_KEY
 
 s3 = boto3.client('s3', region_name='us-east-1')
 
-API.api_key = os.getenv("ELEVEN_API_KEY")
 
 router = APIRouter()
 
@@ -36,7 +37,7 @@ def get_projects(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/files")
-def upload_file(file: UploadFile = File(...), project_id: int, user: dict = Depends(get_current_user)):
+def upload_file(project_id: int, file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     try:
         # Check file size
         if len(file.file.read()) > 10 * 1024 * 1024:  # 10MB limit
